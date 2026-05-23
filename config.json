@@ -1,0 +1,32 @@
+{
+    "input_file": "data/input.csv",
+    "output_file": "data/output.csv",
+    "log_file": "logs/run.log",
+    "required_columns": [
+        "order_id",
+        "customer_name",
+        "email",
+        "product",
+        "quantity",
+        "price",
+        "order_date"
+    ],
+    "required_fields": [
+        "order_id",
+        "customer_name",
+        "email"
+    ],
+    "numeric_fields": [
+        "quantity",
+        "price"
+    ],
+    "date_fields": [
+        "order_date"
+    ],
+    "date_format": "%Y-%m-%d",
+    "fill_defaults": {
+        "quantity": 1,
+        "price": 0.0
+    },
+    "drop_duplicates": true
+}
