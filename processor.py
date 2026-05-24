@@ -1,6 +1,7 @@
 import pandas as pd
 import json
 import logging
+from typing import Tuple
 from datetime import datetime
 
 logger = logging.getLogger("csv_engine")
@@ -31,13 +32,18 @@ def drop_duplicates(df: pd.DataFrame) -> pd.DataFrame:
         logger.warning(f"Dropped {dropped} duplicate row(s)")
     return df
 
-def handle_numeric_fields(df: pd.DataFrame, numeric_fields: list, fill_defaults: dict) -> pd.DataFrame:
+def handle_numeric_fields(df: pd.DataFrame, numeric_fields: list, fill_defaults: dict) -> Tuple[pd.DataFrame, dict]:
+    audit_dict = {}
+    
     for field in numeric_fields:
         if field not in df.columns:
             continue
 
         # Fill missing values with default if one exists
         if field in fill_defaults:
+            index_with_nan = df[field].index[df[field].isna()]
+            for row_index in index_with_nan:
+                audit_dict.setdefault(row_index, []).append(field)
             before = df[field].isna().sum()
             df[field] = df[field].fillna(fill_defaults[field])
             if before > 0:
@@ -50,13 +56,16 @@ def handle_numeric_fields(df: pd.DataFrame, numeric_fields: list, fill_defaults:
         if invalid.any():
             logger.warning(f"Field '{field}': {invalid.sum()} non-numeric value(s) found")
             if field in fill_defaults:
+                invalid_with_nan = invalid.index[invalid]
+                for row_index in invalid_with_nan:
+                    audit_dict.setdefault(row_index, []).append(field)
                 df.loc[invalid, field] = fill_defaults[field]
                 logger.warning(f"Field '{field}': replaced non-numeric value(s) with default {fill_defaults[field]}")
             else:
                 df = df[~invalid]
                 logger.warning(f"Field '{field}': dropped {invalid.sum()} row(s) with non-numeric values")
 
-    return df
+    return df, audit_dict
 
 def handle_date_fields(df: pd.DataFrame, date_fields: list, date_format: str) -> pd.DataFrame:
     for field in date_fields:
@@ -95,8 +104,12 @@ def run_pipeline(config_path: str) -> None:
     
     if config.get("drop_duplicates"):
         df = drop_duplicates(df)
-
-    df = handle_numeric_fields(df, config["numeric_fields"], config.get("fill_defaults", {}))
+    
+    df, audit_dict = handle_numeric_fields(df, config["numeric_fields"], config.get("fill_defaults", {}))
+    if audit_dict:
+        changes_map = {key: ", ".join(f"{field}->default" for field in fields) for key, fields in audit_dict.items()}
+        df["_changes"] = df.index.map(changes_map)
+        
     df = handle_date_fields(df, config["date_fields"], config["date_format"])
     df = drop_required_field_violations(df, config["required_fields"])
 
