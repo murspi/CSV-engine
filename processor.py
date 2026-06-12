@@ -3,6 +3,7 @@ import json
 import logging
 from typing import Tuple
 from datetime import datetime
+from schemas import ProcessResponse
 
 logger = logging.getLogger("csv_engine")
 
@@ -16,21 +17,21 @@ def load_csv(file_path: str) -> pd.DataFrame:
     logger.info(f"Loaded {len(df)} rows, {len(df.columns)} columns")
     return df
 
-def validate_columns(df: pd.DataFrame, required_columns: list) -> bool:
+def validate_columns(df: pd.DataFrame, required_columns: list) -> list[str]:
     missing = [col for col in required_columns if col not in df.columns]
     if missing:
         logger.error(f"Missing required columns: {missing}. Aborting.")
-        return False
+        return missing
     logger.info("Column validation passed")
-    return True
+    return missing
 
-def drop_duplicates(df: pd.DataFrame) -> pd.DataFrame:
+def drop_duplicates(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
     before = len(df)
     df = df.drop_duplicates()
     dropped = before - len(df)
     if dropped > 0:
         logger.warning(f"Dropped {dropped} duplicate row(s)")
-    return df
+    return df, dropped
 
 def handle_numeric_fields(df: pd.DataFrame, numeric_fields: list, fill_defaults: dict) -> Tuple[pd.DataFrame, dict]:
     audit_dict = {}
@@ -79,19 +80,19 @@ def handle_date_fields(df: pd.DataFrame, date_fields: list, date_format: str) ->
         df[field] = parsed
     return df
 
-def drop_required_field_violations(df: pd.DataFrame, required_fields: list) -> pd.DataFrame:
+def drop_required_field_violations(df: pd.DataFrame, required_fields: list) -> Tuple[pd.DataFrame, int]:
     before = len(df)
     df = df.dropna(subset=required_fields)
     dropped = before - len(df)
     if dropped > 0:
         logger.warning(f"Dropped {dropped} row(s) missing in fields: {required_fields}")
-    return df
+    return df, dropped
 
 def save_output(df: pd.DataFrame, output_path: str) -> None:
     df.to_csv(output_path, index=False)
     logger.info(f"Clean file saved to: {output_path}")
 
-def run_pipeline(config_path: str) -> None:
+def run_pipeline(config_path: str) -> ProcessResponse:
     config = load_config(config_path)
 
     logger.info("=== CSV Engine Started ===")
@@ -99,20 +100,36 @@ def run_pipeline(config_path: str) -> None:
     df = load_csv(config["input_file"])
     original_count = len(df)
 
-    if not validate_columns(df, config["required_columns"]):
-        return
+    missing_columns = validate_columns(df, config["required_columns"])
+    if missing_columns:
+        return ProcessResponse(
+        success_or_failure = False,
+        rows_in = original_count,
+        rows_out = 0,
+        duplicates_dropped = 0,
+        required_field_violations_dropped = 0,
+        columns_validated = missing_columns
+    )
     
-    if config.get("drop_duplicates"):
-        df = drop_duplicates(df)
+    df, duplicates_dropped = drop_duplicates(df)
     
     df, audit_dict = handle_numeric_fields(df, config["numeric_fields"], config.get("fill_defaults", {}))
     if audit_dict:
         changes_map = {key: ", ".join(f"{field}->default" for field in fields) for key, fields in audit_dict.items()}
         df["_changes"] = df.index.map(changes_map)
-        
+
     df = handle_date_fields(df, config["date_fields"], config["date_format"])
-    df = drop_required_field_violations(df, config["required_fields"])
+    df, required_field_violations = drop_required_field_violations(df, config["required_fields"])
 
     save_output(df, config["output_file"])
 
     logger.info(f"=== Pipeline Complete | {original_count} rows in -> {len(df)} rows out ===")
+    
+    return ProcessResponse(
+        success_or_failure = True,
+        rows_in = original_count,
+        rows_out = len(df),
+        duplicates_dropped = duplicates_dropped,
+        required_field_violations_dropped = required_field_violations,
+        columns_validated = missing_columns
+    )
