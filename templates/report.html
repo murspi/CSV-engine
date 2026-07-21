@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>CSV Engine Report</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 2rem;
+            background-color: #f4f4f4;
+        }
+
+        .report-container {
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            max-width: 600px;
+            margin: auto;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            margin-top: 0;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+
+        td,
+        th {
+            border: 1px solid #ddd;
+            padding: 0.6rem;
+            text-align: left;
+        }
+
+        .status-success {
+            color: green;
+            font-weight: bold;
+        }
+
+        .status-failure {
+            color: red;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="report-container">
+        <h1>CSV Engine Report</h1>
+        <p>{{ timestamp }}</p>
+        {% if success %}
+        <span class="status-success">SUCCESS</span>
+        {% else %}
+        <span class="status-failure">FAILURE</span>
+        {% endif %}
+
+        <table>
+            <tr>
+                <th>Metric</th>
+                <th>Value</th>
+            </tr>
+            <tr>
+                <td>Rows In</td>
+                <td>{{ rows_in }}</td>
+            </tr>
+            <tr>
+                <td>Rows Out</td>
+                <td>{{ rows_out }}</td>
+            </tr>
+            <tr>
+                <td>Duplicates Dropped</td>
+                <td>{{ duplicates_dropped }}</td>
+            </tr>
+            <tr>
+                <td>Required Field Violations Dropped</td>
+                <td>{{ required_field_violations_dropped | default(0)}}</td>
+            </tr>
+            <tr>
+                <td>Columns Validated</td>
+                <td>{{ columns_validated | join(", ") if columns_validated else "All columns valid" }}</td>
+            </tr>
+        </table>
+    </div>
+</body>
+
+</html>

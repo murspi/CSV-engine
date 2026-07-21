@@ -4,8 +4,12 @@ import tempfile
 import shutil
 import os
 import json
+from reporter import generate_report
+from fastapi.responses import FileResponse
 
 last_result = None
+last_file = None
+last_report_path = None
 
 app = FastAPI()
 
@@ -15,6 +19,8 @@ async def get_health():
 
 @app.post("/process")
 async def process_file(file: UploadFile = File(...)):
+    global last_result, last_file, last_report_path
+
     # Save uploaded CSV to a temp file
     with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_csv:
         shutil.copyfileobj(file.file, tmp_csv)
@@ -30,11 +36,12 @@ async def process_file(file: UploadFile = File(...)):
         json.dump(config, tmp_cfg)
         tmp_cfg_path = tmp_cfg.name
 
-    global last_result
+    last_file = file.filename
 
     # Run pipeline with the modified config
     result = run_pipeline(tmp_cfg_path)
     last_result = result
+    last_report_path = generate_report(result)
 
     # Clean up both temp files
     os.unlink(tmp_csv_path)
@@ -48,3 +55,17 @@ async def check_status():
         return last_result
     else:
         return {"message": "No previous runs detected"}
+    
+@app.get("/last-file")
+async def check_last_file():
+    if last_file is not None:
+        return last_file
+    else:
+        return {"message:": "No files have been used"}
+    
+@app.get("/report")
+async def get_report():
+    if last_report_path is not None:
+        return FileResponse(last_report_path)
+    else:
+        return {"message": "No report available."}
