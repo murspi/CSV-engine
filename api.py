@@ -4,7 +4,9 @@ import tempfile
 import shutil
 import os
 import json
+from logger import setup_logger
 from reporter import generate_report
+from scheduler import start_scheduler
 from fastapi.responses import FileResponse
 
 last_result = None
@@ -12,6 +14,13 @@ last_file = None
 last_report_path = None
 
 app = FastAPI()
+
+@app.on_event("startup")
+async def startup_event():
+    with open("config.json", "r") as f:
+        config = json.load(f)
+    setup_logger(config["log_file"])
+    start_scheduler("config.json")
 
 @app.get("/health")
 async def get_health():

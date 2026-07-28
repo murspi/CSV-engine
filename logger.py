@@ -6,6 +6,8 @@ def setup_logger(log_file: str) -> logging.Logger:
 
     logger = logging.getLogger("csv_engine")
     logger.setLevel(logging.DEBUG)
+    if logger.handlers:
+        return logger
 
     # File Handler saves everything to log file
     file_handler = logging.FileHandler(log_file)
