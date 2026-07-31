@@ -7,7 +7,7 @@ import json
 from logger import setup_logger
 from reporter import generate_report
 from scheduler import start_scheduler
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 last_result = None
 last_file = None
@@ -78,3 +78,9 @@ async def get_report():
         return FileResponse(last_report_path)
     else:
         return {"message": "No report available."}
+
+@app.get("/")
+async def get_dashboard():
+    with open("templates/dashboard.html", "r") as f:
+        html = f.read()
+        return HTMLResponse(content=html, status_code=200)

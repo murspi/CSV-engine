@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSV Engine Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 2rem;
+        }
+
+        .container {
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            max-width: 600px;
+            width: 90%;
+            margin: auto;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            margin-top: 0;
+        }
+
+        input[type="file"] {
+            margin: 1rem 0;
+            display: block;
+        }
+
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 0.6rem 1.2rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1rem;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        #results {
+            margin-top: 1.5rem;
+            display: none;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+
+        td,
+        th {
+            border: 1px solid #ddd;
+            padding: 0.6rem;
+            text-align: left;
+        }
+
+        .status-success {
+            color: green;
+            font-weight: bold;
+        }
+
+        .status-failure {
+            color: red;
+            font-weight: bold;
+        }
+
+        #view-report {
+            margin-top: 1rem;
+            background-color: #2196F3;
+            display: none;
+        }
+
+        #view-report:hover {
+            background-color: #1976D2;
+        }
+
+        #loading {
+            display: none;
+            color: #666;
+            margin-top: 1rem;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>CSV Engine Dashboard</h1>
+        <p>Upload a CSV file to run the pipeline and generate a report.</p>
+
+        <input type="file" id="csv-file" accept=".csv" />
+        <button onclick="runPipeline()">Run Pipeline</button>
+        <p id="loading">Processing...</p>
+
+        <div id="results">
+            <h2>Results</h2>
+            <p>Status: <span id="status"></span></p>
+            <table>
+                <tr>
+                    <th>Metric</th>
+                    <th>Value</th>
+                </tr>
+                <tr>
+                    <td>Rows In</td>
+                    <td id="rows-in"></td>
+                </tr>
+                <tr>
+                    <td>Rows Out</td>
+                    <td id="rows-out"></td>
+                </tr>
+                <tr>
+                    <td>Duplicates Dropped</td>
+                    <td id="duplicates"></td>
+                </tr>
+                <tr>
+                    <td>Required Field Violations Dropped</td>
+                    <td id="violations"></td>
+                </tr>
+            </table>
+            <button id="view-report" onclick="window.open('/report', '_blank')">
+                View Full Report
+            </button>
+        </div>
+    </div>
+
+    <script>
+        async function runPipeline() {
+            const fileInput = document.getElementById('csv-file');
+            const file = fileInput.files[0];
+
+            if (!file) {
+                alert('Please select a CSV file first.');
+                return;
+            }
+
+            // Show loading, hide previous results
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('results').style.display = 'none';
+            document.getElementById('view-report').style.display = 'none';
+
+            // Build form data and send to /process
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch('/process', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                // Populate results
+                const statusEl = document.getElementById('status');
+                if (data.success_or_failure) {
+                    statusEl.textContent = 'SUCCESS';
+                    statusEl.className = 'status-success';
+                } else {
+                    statusEl.textContent = 'FAILURE';
+                    statusEl.className = 'status-failure';
+                }
+
+                document.getElementById('rows-in').textContent = data.rows_in;
+                document.getElementById('rows-out').textContent = data.rows_out;
+                document.getElementById('duplicates').textContent = data.duplicates_dropped;
+                document.getElementById('violations').textContent = data.required_field_violations_dropped;
+
+                // Show results and report button
+                document.getElementById('results').style.display = 'block';
+                document.getElementById('view-report').style.display = 'inline-block';
+
+            } catch (error) {
+                alert('Something went wrong: ' + error.message);
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
+        }
+    </script>
+</body>
+
+</html>
