@@ -3,10 +3,10 @@
 ## Learning Plan
 600 hour automation -> data -> cloud -> AI roadmap.
 Currently on Big Project 1 — Business Automation Platform.
-Week 13 complete (FastAPI service with three endpoints + /last-file practical task).
+Week 16 complete (FastAPI Dashboard + Docker containerization).
 
 ## Roadmap Ahead
-- Week 14 — Report Generator layered onto csv_engine
+- Week 17 — Database layer (SQLite → PostgreSQL)
 
 ## Mentoring Preferences
 - Full concept explanation before code
@@ -15,26 +15,39 @@ Week 13 complete (FastAPI service with three endpoints + /last-file practical ta
 - Cross-platform code always
 - Commit regularly, not just at end
 - Guide toward answers, don't hand them directly
+- Be generous with explanations — goal is to learn and understand, not just build
 
 ## Current Project: csv_engine
 Location: C:\csv_engine
-Stack: Python 3.14.2, pandas, FastAPI, uvicorn, VSCode, Windows 11
-Repo: github.com/YOURUSERNAME/csv-engine
+Stack: Python 3.14.2 local / Python 3.11 in Docker, pandas, FastAPI, uvicorn, Jinja2, APScheduler, Docker, VSCode, Windows 11
+Repo: github.com/murspi/CSV-engine
 
 ## What's Built
-- logger.py — logging setup with file and console handlers
+- logger.py — logging setup with file and console handlers + handler accumulation guard
 - processor.py — full validation and cleaning pipeline, returns ProcessResponse
-- main.py — CLI entry point with argparse
+- main.py — CLI entry point with argparse, generates report after pipeline run
 - config.json — config-driven rules
 - input.csv — test dataset with intentional errors
 - schemas.py — Pydantic response models for API layer
-- api.py — FastAPI service with four endpoints
+- api.py — FastAPI service with six endpoints + scheduler startup + dashboard route
+- reporter.py — Jinja2 HTML report generator, saves to data/reports/report.html
+- mailer.py — Gmail SMTP email sender with retry logic (3 attempts, 5s delay)
+- scheduler.py — APScheduler background scheduler, self-stops after successful send
+- templates/report.html — Jinja2 HTML report template
+- templates/dashboard.html — browser-based user dashboard with fetch() API calls
+- Dockerfile — Docker image definition
+- docker-compose.yml — local container orchestration
+- .dockerignore — excludes .env, venv, pycache, logs, generated files
+- README.md — full project documentation
 
 ## API Endpoints
-- GET /health — returns {"status": "healthy"} to confirm service is alive
+- GET / — serves browser dashboard (dashboard.html)
+- GET /health — returns {"status": "healthy"}
 - POST /process — accepts CSV upload, runs pipeline, returns ProcessResponse
 - GET /status — returns last ProcessResponse or "No previous runs detected"
 - GET /last-file — returns filename of last uploaded file or "No files have been used"
+- GET /report — serves last generated HTML report via FileResponse
+- GET /docs — Swagger UI
 
 ## Pipeline Steps (in order)
 1. Load config
@@ -45,13 +58,44 @@ Repo: github.com/YOURUSERNAME/csv-engine
 6. Drop required field violations
 7. Add _changes column to output if any defaults were applied
 8. Save output
+9. Generate HTML report (reporter.py)
+10. Send report via email (mailer.py) — scheduled or on demand
 
-## Key architectural decisions (Week 13)
-- processor.py refactored to return ProcessResponse instead of None
+## Key Architectural Decisions
+- processor.py returns ProcessResponse instead of None
 - Every exit point in run_pipeline() returns a structured response
-- /process uses two temp files: one for the uploaded CSV, one for modified config
+- /process uses two temp files: one for uploaded CSV, one for modified config
 - Temp files deleted after pipeline run via os.unlink()
-- last_result and last_file stored as module-level variables in api.py
+- last_result, last_file, last_report_path stored as module-level variables in api.py
+- reporter.py is pure — receives ProcessResponse, renders template, writes file, returns path
+- Timestamp generated in reporter.py at render time, not in ProcessResponse
+- mailer.py loads credentials from .env via python-dotenv, never hardcoded
+- scheduler fires every 1 minute for testing (change to cron for production)
+- scheduler self-removes job after successful email send
+- setup_logger() has handler accumulation guard (if logger.handlers: return logger)
+- Logger initialized in startup_event before scheduler starts to avoid thread issues
+- Docker uses volumes for data/ and logs/ so generated files persist after container stops
+- .env injected at runtime via env_file in docker-compose.yml, never baked into image
+- Dashboard uses fetch() to POST to /process and display results without page reload
+
+## Environment Variables (in .env, never committed)
+- GMAIL_ADDRESS — sender Gmail address
+- GMAIL_APP_PASSWORD — Gmail app password (requires 2FA enabled)
+- RECIPIENT_EMAIL — report recipient email
+
+## Running the Project
+### Docker (recommended)
+```
+docker-compose build
+docker-compose up
+```
+Open http://127.0.0.1:8000
+
+### Local
+```
+uvicorn api:app --reload
+```
+Open http://127.0.0.1:8000
 
 ---
 
@@ -104,6 +148,9 @@ def setup_logger(log_file: str) -> logging.Logger:
     logger = logging.getLogger("csv_engine")
     logger.setLevel(logging.DEBUG)
 
+    if logger.handlers:
+        return logger
+
     file_handler = logging.FileHandler(log_file)
     file_handler.setLevel(logging.DEBUG)
 
@@ -141,141 +188,119 @@ class ProcessResponse(BaseModel):
 
 ---
 
-## processor.py
+## reporter.py
 ```python
-import pandas as pd
-import json
-import logging
-from typing import Tuple
-from datetime import datetime
+import os
 from schemas import ProcessResponse
+from jinja2 import Environment, FileSystemLoader
+from datetime import datetime
+
+env = Environment(loader=FileSystemLoader("templates"))
+template = env.get_template("report.html")
+
+def generate_report(result: ProcessResponse) -> str:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    os.makedirs("data/reports", exist_ok=True)
+    output_path = os.path.join("data", "reports", "report.html")
+    context = {
+        "timestamp": timestamp,
+        "success": result.success_or_failure,
+        "rows_in": result.rows_in,
+        "rows_out": result.rows_out,
+        "duplicates_dropped": result.duplicates_dropped,
+        "violations_dropped": result.required_field_violations_dropped,
+        "columns_validated": result.columns_validated
+    }
+    html = template.render(context)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    return output_path
+```
+
+---
+
+## mailer.py
+```python
+import smtplib
+import os
+import time
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from dotenv import load_dotenv
+import logging
+
+load_dotenv()
+
+GMAIL_ADDRESS = os.getenv("GMAIL_ADDRESS")
+GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
+RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL")
 
 logger = logging.getLogger("csv_engine")
 
-def load_config(config_path: str) -> dict:
+def send_report(report_path: str) -> bool:
+    max_attempts = 3
+    delay = 5
+    if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD or not RECIPIENT_EMAIL:
+        logger.error("Email credentials not found. Check your .env file.")
+        return False
+
+    with open(report_path, "r", encoding="utf-8") as f:
+        report_content = f.read()
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = "CSV Engine Report"
+    msg["From"] = GMAIL_ADDRESS
+    msg["To"] = RECIPIENT_EMAIL
+    msg.attach(MIMEText(report_content, "html"))
+
+    for attempt in range(max_attempts):
+        try:
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+                server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+                server.sendmail(GMAIL_ADDRESS, RECIPIENT_EMAIL, msg.as_string())
+                logger.info(f"Report sent successfully to {RECIPIENT_EMAIL}")
+                return True
+        except Exception as e:
+            logger.error(f"Attempt {attempt + 1} failed: {e}")
+            if attempt < max_attempts - 1:
+                logger.info(f"Retrying in {delay} seconds...")
+                time.sleep(delay)
+    logger.error("All attempts to send the report failed.")
+    return False
+```
+
+---
+
+## scheduler.py
+```python
+from apscheduler.schedulers.background import BackgroundScheduler
+from processor import run_pipeline
+from reporter import generate_report
+from mailer import send_report
+from logger import setup_logger
+import logging
+import json
+
+logger = logging.getLogger("csv_engine")
+scheduler = BackgroundScheduler()
+
+def scheduled_job(config_path: str):
     with open(config_path, "r") as f:
-        return json.load(f)
+        config = json.load(f)
+    setup_logger(config["log_file"])
+    logger.info("Scheduled job started.")
+    result = run_pipeline(config_path)
+    report_path = generate_report(result)
+    if send_report(report_path):
+        logger.info("Report send successfully.")
+        scheduler.remove_job("scheduled_job")
+    else:
+        logger.error("Failed to send report.")
 
-def load_csv(file_path: str) -> pd.DataFrame:
-    logger.info(f"Loading file: {file_path}")
-    df = pd.read_csv(file_path)
-    logger.info(f"Loaded {len(df)} rows, {len(df.columns)} columns")
-    return df
-
-def validate_columns(df: pd.DataFrame, required_columns: list) -> list[str]:
-    missing = [col for col in required_columns if col not in df.columns]
-    if missing:
-        logger.error(f"Missing required columns: {missing}. Aborting.")
-        return missing
-    logger.info("Column validation passed")
-    return missing
-
-def drop_duplicates(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
-    before = len(df)
-    df = df.drop_duplicates()
-    dropped = before - len(df)
-    if dropped > 0:
-        logger.warning(f"Dropped {dropped} duplicate row(s)")
-    return df, dropped
-
-def handle_numeric_fields(df: pd.DataFrame, numeric_fields: list, fill_defaults: dict) -> Tuple[pd.DataFrame, dict]:
-    audit_dict = {}
-
-    for field in numeric_fields:
-        if field not in df.columns:
-            continue
-
-        if field in fill_defaults:
-            index_with_nan = df[field].index[df[field].isna()]
-            for row_index in index_with_nan:
-                audit_dict.setdefault(row_index, []).append(field)
-            before = df[field].isna().sum()
-            df[field] = df[field].fillna(fill_defaults[field])
-            if before > 0:
-                logger.warning(f"Field '{field}': filled {before} missing value(s) with default {fill_defaults[field]}")
-
-        original = df[field].copy()
-        df[field] = pd.to_numeric(df[field], errors="coerce")
-        invalid = df[field].isna() & original.notna()
-        if invalid.any():
-            logger.warning(f"Field '{field}': {invalid.sum()} non-numeric value(s) found")
-            if field in fill_defaults:
-                invalid_with_nan = invalid.index[invalid]
-                for row_index in invalid_with_nan:
-                    audit_dict.setdefault(row_index, []).append(field)
-                df.loc[invalid, field] = fill_defaults[field]
-                logger.warning(f"Field '{field}': replaced non-numeric value(s) with default {fill_defaults[field]}")
-            else:
-                df = df[~invalid]
-                logger.warning(f"Field '{field}': dropped {invalid.sum()} row(s) with non-numeric values")
-
-    return df, audit_dict
-
-def handle_date_fields(df: pd.DataFrame, date_fields: list, date_format: str) -> pd.DataFrame:
-    for field in date_fields:
-        if field not in df.columns:
-            continue
-        parsed = pd.to_datetime(df[field], format=date_format, errors="coerce")
-        invalid = parsed.isna() & df[field].notna()
-        if invalid.any():
-            logger.warning(f"Field '{field}': {invalid.sum()} invalid date(s) — rows dropped")
-            df = df[~invalid]
-        df[field] = parsed
-    return df
-
-def drop_required_field_violations(df: pd.DataFrame, required_fields: list) -> Tuple[pd.DataFrame, int]:
-    before = len(df)
-    df = df.dropna(subset=required_fields)
-    dropped = before - len(df)
-    if dropped > 0:
-        logger.warning(f"Dropped {dropped} row(s) missing in fields: {required_fields}")
-    return df, dropped
-
-def save_output(df: pd.DataFrame, output_path: str) -> None:
-    df.to_csv(output_path, index=False)
-    logger.info(f"Clean file saved to: {output_path}")
-
-def run_pipeline(config_path: str) -> ProcessResponse:
-    config = load_config(config_path)
-
-    logger.info("=== CSV Engine Started ===")
-
-    df = load_csv(config["input_file"])
-    original_count = len(df)
-
-    missing_columns = validate_columns(df, config["required_columns"])
-    if missing_columns:
-        return ProcessResponse(
-            success_or_failure=False,
-            rows_in=original_count,
-            rows_out=0,
-            duplicates_dropped=0,
-            required_field_violations_dropped=0,
-            columns_validated=missing_columns
-        )
-
-    df, duplicates_dropped = drop_duplicates(df)
-
-    df, audit_dict = handle_numeric_fields(df, config["numeric_fields"], config.get("fill_defaults", {}))
-    if audit_dict:
-        changes_map = {key: ", ".join(f"{field}->default" for field in fields) for key, fields in audit_dict.items()}
-        df["_changes"] = df.index.map(changes_map)
-
-    df = handle_date_fields(df, config["date_fields"], config["date_format"])
-    df, required_field_violations = drop_required_field_violations(df, config["required_fields"])
-
-    save_output(df, config["output_file"])
-
-    logger.info(f"=== Pipeline Complete | {original_count} rows in -> {len(df)} rows out ===")
-
-    return ProcessResponse(
-        success_or_failure=True,
-        rows_in=original_count,
-        rows_out=len(df),
-        duplicates_dropped=duplicates_dropped,
-        required_field_violations_dropped=required_field_violations,
-        columns_validated=missing_columns
-    )
+def start_scheduler(config_path: str):
+    scheduler.add_job(scheduled_job, "interval", minutes=1, id="scheduled_job", args=[config_path])
+    scheduler.start()
+    logger.info("Scheduler started.")
 ```
 
 ---
@@ -288,11 +313,29 @@ import tempfile
 import shutil
 import os
 import json
+from logger import setup_logger
+from reporter import generate_report
+from scheduler import start_scheduler
+from fastapi.responses import FileResponse, HTMLResponse
 
 last_result = None
 last_file = None
+last_report_path = None
 
 app = FastAPI()
+
+@app.on_event("startup")
+async def startup_event():
+    with open("config.json", "r") as f:
+        config = json.load(f)
+    setup_logger(config["log_file"])
+    start_scheduler("config.json")
+
+@app.get("/")
+async def get_dashboard():
+    with open("templates/dashboard.html", "r", encoding="utf-8") as f:
+        html = f.read()
+    return HTMLResponse(content=html)
 
 @app.get("/health")
 async def get_health():
@@ -300,30 +343,25 @@ async def get_health():
 
 @app.post("/process")
 async def process_file(file: UploadFile = File(...)):
-    global last_result, last_file
+    global last_result, last_file, last_report_path
 
-    # Save uploaded CSV to a temp file
     with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_csv:
         shutil.copyfileobj(file.file, tmp_csv)
         tmp_csv_path = tmp_csv.name
 
-    # Load config and override input_file with the temp CSV path
     with open("config.json", "r") as f:
         config = json.load(f)
     config["input_file"] = tmp_csv_path
 
-    # Save modified config to its own temp file
     with tempfile.NamedTemporaryFile(delete=False, suffix=".json", mode="w") as tmp_cfg:
         json.dump(config, tmp_cfg)
         tmp_cfg_path = tmp_cfg.name
 
     last_file = file.filename
-
-    # Run pipeline with the modified config
     result = run_pipeline(tmp_cfg_path)
     last_result = result
+    last_report_path = generate_report(result)
 
-    # Clean up both temp files
     os.unlink(tmp_csv_path)
     os.unlink(tmp_cfg_path)
 
@@ -341,7 +379,14 @@ async def check_last_file():
     if last_file is not None:
         return last_file
     else:
-        return {"message": "No files have been used"}
+        return {"message:": "No files have been used"}
+
+@app.get("/report")
+async def get_report():
+    if last_report_path is not None:
+        return FileResponse(last_report_path)
+    else:
+        return {"message": "No report available."}
 ```
 
 ---
@@ -351,6 +396,7 @@ async def check_last_file():
 import argparse
 from logger import setup_logger
 from processor import run_pipeline
+from reporter import generate_report
 import json
 
 def main():
@@ -362,7 +408,9 @@ def main():
         config = json.load(f)
 
     setup_logger(config["log_file"])
-    run_pipeline(args.config)
+    result = run_pipeline(args.config)
+    report_path = generate_report(result)
+    print(f"Report saved to: {report_path}")
 
 if __name__ == "__main__":
     main()
